@@ -140,41 +140,153 @@ namespace TeamCityBuildChanges.Commands
             //Now we need to see if we need to recurse, and whether we have been given a cache file....
             if (changeManifest.NuGetPackageChanges.Any() && recurse && _packageBuildMappingCache != null)
             {
-                foreach (var dependency in changeManifest.NuGetPackageChanges.Where(c => c.Type == NuGetPackageChangeType.Modified))
-                {
-                    var mappings = _packageBuildMappingCache.PackageBuildMappings.Where(m => m.PackageId.Equals(dependency.PackageId, StringComparison.CurrentCultureIgnoreCase)).ToList();
-                    PackageBuildMapping build = null;
-                    if (mappings.Count == 1)
-                    {
-                        //We only got one back, this is good...
-                        build = mappings.First();
-                        changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now, Status.Ok, string.Format("Found singular packages to build mapping {0}.", build.BuildConfigurationName)));
-                    }
-                    else if (mappings.Any())
-                    {
-                        //Ok, so multiple builds are outputting this package, so we need to try and constrain on project...
-                        build = mappings.FirstOrDefault(m => m.Project.Equals(buildTypeDetails.Project.Name, StringComparison.OrdinalIgnoreCase));
-                        if (build != null) changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now, Status.Warning, string.Format("Found duplicate mappings, using package to build mapping {0}.", build.BuildConfigurationName)));
-                    }
+                //We can have multiple packages from the same build, they will all tick together...we only want to recurse the one build.
+                //First, get the list of package changes, and the set of builds that they are associated with....
+                var changedpackageMapping =  GetPackageChangeToBuildMapping(changeManifest);
+                
+                //Now sort out which PackageBuildMappings are associated with which builds
+                var buildPackageMappings = GetBuildToPackageChangeMapping(changeManifest, buildTypeDetails, changedpackageMapping);
+                
+                //This should end up being a  List<KeyValuePair<PackageBuildMapping, List<NuGetPackageChange>>> where the NuGetPackageChange associated with a PackageBuildMapping
+                //are all the same OldVersion and NewVersion.
+                //This is so when we check a PackageBuildMapping, we can use the OldVersion/NewVersion from the associated list and ALL the NuGetPackageChange objects can get the 
+                //same ChangeManifest.  We will be querying the PackagBuildMapping multiple times, so we will need caching to speed this up.
 
-                    if (build != null)
+                //var test2 = new List<KeyValuePair<PackageBuildMapping, List<NuGetPackageChange>>>();
+                    
+
+                //Now we need to get a mapping of 
+                var packageBuildChangeManifestMapping = new List<Tuple<PackageBuildMapping, string, string, ChangeManifest>>();
+                foreach (var build in buildPackageMappings)
+                {
+                    if (build.Key.BuildConfigurationId == buildType)
+                        continue;
+                    foreach (var specificPackageChange in build.Value)
                     {
-                        var instanceTeamCityApi = _api.TeamCityServer.Equals(build.ServerUrl, StringComparison.OrdinalIgnoreCase)
+                        var versionMin = specificPackageChange.OldVersion;
+                        var versionMax = specificPackageChange.NewVersion;
+
+                        var instanceTeamCityApi = _api.TeamCityServer.Equals(build.Key.ServerUrl, StringComparison.OrdinalIgnoreCase)
                                                               ? _api
-                                                              : new TeamCityApi(build.ServerUrl);
- 
-                        var resolver = new AggregateBuildDeltaResolver(instanceTeamCityApi, _externalIssueResolvers,_packageChangeComparator,_packageBuildMappingCache);
-                        var dependencyManifest = resolver.CreateChangeManifest(null, build.BuildConfigurationId, null,dependency.OldVersion,dependency.NewVersion, null, true, true);
-                        dependency.ChangeManifest = dependencyManifest;
-                    }
-                    else
-                    {
-                        changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now, Status.Warning, string.Format("Did not find a mapping for package: {0}.", dependency.PackageId)));
+                                                              : new TeamCityApi(build.Key.ServerUrl);
+
+                        var resolver = new AggregateBuildDeltaResolver(instanceTeamCityApi, _externalIssueResolvers, _packageChangeComparator, _packageBuildMappingCache);
+                        var dependencyManifest = resolver.CreateChangeManifest(null, build.Key.BuildConfigurationId, null, versionMin, versionMax, null, true, true);
+                        packageBuildChangeManifestMapping.Add(Tuple.Create(build.Key, versionMin, versionMin, dependencyManifest));
                     }
                 }
             }
 
             return changeManifest;
+        }
+        
+        private List<KeyValuePair<PackageBuildMapping, List<NuGetPackageChange>>> GetBuildToPackageChangeMapping(ChangeManifest changeManifest, BuildTypeDetails buildTypeDetails, Dictionary<NuGetPackageChange, List<PackageBuildMapping>> mappings)
+        {
+            //var temp = new List<KeyValuePair<PackageBuildMapping, List<NuGetPackageChange>>>();
+            var buildPackageMappings = new List<KeyValuePair<PackageBuildMapping, List<NuGetPackageChange>>>();
+            var versionLookup = mappings.Keys.ToLookup(x => new {x.OldVersion, x.NewVersion});
+            foreach (var lookup in versionLookup)
+            {
+                var versionPair = lookup.Key;
+                foreach (var packageChange in versionLookup[versionPair])
+                {
+                    PackageBuildMapping build = null;
+                    var mapping = mappings[packageChange];
+
+                    if (!mapping.Any())
+                    {
+                        changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now, Status.Warning, string.Format("Did not find a mapping for package: {0}.", packageChange.PackageId)));
+                        continue;
+                    }
+
+                    if (mapping.Count == 1)
+                    {
+                        //We only got one back, this is good...
+                        build = mapping.First();
+
+                        changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now, Status.Ok, string.Format("Found singular packages to build mapping {0}.", build.BuildConfigurationName)));
+                    }
+
+                    if (mappings.Any())
+                    {
+                        //Ok, so multiple builds are outputting this package, so we need to try and constrain on project...
+                        build =
+                            mapping.FirstOrDefault(
+                                m => m.Project.Equals(buildTypeDetails.Project.Name, StringComparison.OrdinalIgnoreCase));
+                        if (build != null)
+                        {
+                            changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now, Status.Warning, string.Format("Found duplicate mappings, using package to build mapping {0}.", build.BuildConfigurationName)));
+                        }
+                    }
+
+                    if (build != null && buildPackageMappings.Exists(x => x.Key.BuildConfigurationId == build.BuildConfigurationId && x.Key.PackageId == String.Format("{0} - {1}", packageChange.OldVersion, packageChange.NewVersion) && x.Key.ServerUrl == build.ServerUrl))
+                    {
+                        var buildMapping = buildPackageMappings.Find(x => x.Key.BuildConfigurationId == build.BuildConfigurationId && x.Key.PackageId == String.Format("{0} - {1}", packageChange.OldVersion, packageChange.NewVersion) && x.Key.ServerUrl == build.ServerUrl);
+                        if (!buildMapping.Value.Contains(packageChange))
+                            buildMapping.Value.Add(packageChange);
+                    }
+                    else if (build != null)
+                    {
+                        var buildConfiguration = new PackageBuildMapping()
+                            {
+                                BuildConfigurationId = build.BuildConfigurationId,
+                                BuildConfigurationName = build.BuildConfigurationName,
+                                PackageId = String.Format("{0} - {1}", packageChange.OldVersion, packageChange.NewVersion),
+                                Project = build.Project,
+                                ServerUrl = build.ServerUrl
+                            };
+                        buildPackageMappings.Add(new KeyValuePair<PackageBuildMapping, List<NuGetPackageChange>>(buildConfiguration, new List<NuGetPackageChange> { packageChange }));
+                    }
+                }
+            }
+            //foreach (var mapping in mappings)
+            //{
+            //    PackageBuildMapping build = null;
+
+            //    if (!mapping.Value.Any())
+            //    {
+            //        changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now,Status.Warning,string.Format("Did not find a mapping for package: {0}.", mapping.Key.PackageId)));
+            //        continue;
+            //    }
+
+            //    if (mapping.Value.Count == 1)
+            //    {
+            //        //We only got one back, this is good...
+            //        build = mapping.Value.First();
+
+            //        changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now,Status.Ok,string.Format("Found singular packages to build mapping {0}.", build.BuildConfigurationName)));
+            //    }
+            //    if (mappings.Any())
+            //    {
+            //        //Ok, so multiple builds are outputting this package, so we need to try and constrain on project...
+            //        build = mapping.Value.FirstOrDefault(m => m.Project.Equals(buildTypeDetails.Project.Name, StringComparison.OrdinalIgnoreCase));
+            //        if (build != null)
+            //        {
+            //            changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now,Status.Warning,string.Format("Found duplicate mappings, using package to build mapping {0}.",build.BuildConfigurationName)));
+            //        }
+            //    }
+
+            //    if (build != null && buildPackageMappings.ContainsKey(build))
+            //    {
+            //        buildPackageMappings[build].Add(mapping.Key);
+            //    }
+            //    else
+            //    {
+            //        buildPackageMappings.Add(build, new List<NuGetPackageChange> { mapping.Key });
+            //    }
+            //}
+            return buildPackageMappings;
+        }
+
+        private Dictionary<NuGetPackageChange, List<PackageBuildMapping>> GetPackageChangeToBuildMapping(ChangeManifest changeManifest)
+        {
+            var changedpackageMapping = new Dictionary<NuGetPackageChange, List<PackageBuildMapping>>();
+            foreach (var dependency in changeManifest.NuGetPackageChanges.Where(c => c.Type == NuGetPackageChangeType.Modified))
+            {
+                var mappings = _packageBuildMappingCache.PackageBuildMappings.Where(m => m.PackageId.Equals(dependency.PackageId, StringComparison.CurrentCultureIgnoreCase)).ToList();
+                changedpackageMapping.Add(dependency, mappings);
+            }
+            return changedpackageMapping;
         }
 
         private string ResolveToVersion(string buildType)

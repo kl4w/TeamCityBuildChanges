@@ -28,7 +28,7 @@ namespace TeamCityBuildChanges.Commands
 
             var resolver = CreateMockedAggregateBuildDeltaResolver();
 
-            var result = resolver.CreateChangeManifestFromBuildTypeId("bt1", null, "1.2", "1.4", false, true);
+            var result = resolver.CreateChangeManifestFromBuildTypeId("bt1", null, "1.2", "1.6", false, true);
 
             var renderer = new RazorOutputRenderer(_templateFile);
 
@@ -94,7 +94,7 @@ namespace TeamCityBuildChanges.Commands
                             BuildCount = 15, 
                             BuildNumberPattern = "1.{0}", 
                             StartBuildNumber = 2, 
-                            FinishBuildNumber = 4, 
+                            FinishBuildNumber = 6, 
                             StartBuildPackages = new Dictionary<string, string> { { "Package1", "1.0" }, { "Package2", "1.0" } }, 
                             FinishBuildPackages = new Dictionary<string, string> { { "Package1", "1.1" }, { "Package2", "1.0" } }, 
                             IssueCount = 5, 
