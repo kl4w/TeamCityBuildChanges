@@ -16,6 +16,7 @@ namespace TeamCityBuildChanges.ExternalApi.TeamCity
         private readonly RestClient _client;
         private static string _authToken;
         private readonly string _serverUrl;
+        private MemoryBasedBuildCache _cache;
 
         public TeamCityApi(string server, string authToken = null)
         {
@@ -23,6 +24,7 @@ namespace TeamCityBuildChanges.ExternalApi.TeamCity
             _authToken = authToken;
             _serverUrl = string.IsNullOrEmpty(_authToken) ? TeamCityServer + "/guestAuth/": TeamCityServer + "/httpAuth/";
             _client = new RestClient(_serverUrl);
+            _cache = new MemoryBasedBuildCache();
         }
 
         public string TeamCityServer
@@ -41,8 +43,13 @@ namespace TeamCityBuildChanges.ExternalApi.TeamCity
 
         public BuildTypeDetails GetBuildTypeDetailsById(string id)
         {
+            BuildTypeDetails buildTypeDetails;
+            if (_cache.TryCacheForDetailsByBuildTypeId(id, out buildTypeDetails))
+                return buildTypeDetails;
+
             var buildDetails = GetXmlBuildRequest("app/rest/buildTypes/id:{ID}", "ID", id);
             var response = _client.Execute<BuildTypeDetails>(buildDetails);
+            _cache.AddCacheBuildTypeDetailsById(id, response.Data);
             return response.Data;
         }
 
@@ -59,13 +66,22 @@ namespace TeamCityBuildChanges.ExternalApi.TeamCity
 
         public IEnumerable<Artifact> GetArtifactListByBuildType(string buildType)
         {
+            List<Artifact> artifacts;
+            if (_cache.TryCacheForArtifactsByBuildTypeId(buildType, out artifacts))
+                return artifacts;
+
             var request = new RestRequest("repository/download/{ID}/lastSuccessful/teamcity-ivy.xml");
             request.AddParameter("ID", buildType, ParameterType.UrlSegment);
             request.RequestFormat = DataFormat.Xml;
             request.AddHeader("Accept", "application/xml");
             if (!string.IsNullOrEmpty(_authToken)) request.AddHeader("Authorization", "Basic " + _authToken);
             var response = _client.Execute<IvyModule>(request);
-            return response.Data != null ? response.Data.Publications : new List<Artifact>();
+            if (response.Data != null)
+            {
+                artifacts = response.Data.Publications;
+                _cache.AddCacheBuildTypeArtifactsById(buildType, artifacts);
+            }
+            return artifacts;
         }
 
         public List<PackageDetails> GetNuGetDependenciesByBuildTypeAndBuildId(string buildType, string buildId)
@@ -249,8 +265,13 @@ namespace TeamCityBuildChanges.ExternalApi.TeamCity
 
         public IEnumerable<Build> GetBuildsByBuildType(string buildType)
         {
+            List<Build> builds;
+            if (_cache.TryCacheForBuildsByBuildTypeId(buildType, out builds))
+                return builds;
+
             var request = GetXmlBuildRequest("app/rest/builds/?locator=buildType:{ID}", "ID", buildType);
             var response = _client.Execute<List<Build>>(request);
+            _cache.AddCacheBuildsById(buildType, response.Data);
             return response.Data;
         }
     }
