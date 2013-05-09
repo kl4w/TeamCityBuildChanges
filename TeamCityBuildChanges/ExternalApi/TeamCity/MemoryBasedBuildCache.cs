@@ -1,25 +1,46 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using RestSharp;
 
 namespace TeamCityBuildChanges.ExternalApi.TeamCity
 {
     public class MemoryBasedBuildCache
     {
-        private readonly Dictionary<string, BuildTypeDetails> _buildTypeDetailsCache;
-        private readonly Dictionary<string, BuildDetails> _buildDetailsCache;
-        private readonly Dictionary<string, ChangeList> _buildChangeListCache;
-        private readonly Dictionary<string, ChangeDetail> _changeDetailsCache;
-        private readonly Dictionary<int, List<TeamCityApi.PackageDetails>> _buildNuGetDependenciesCache;
+        private readonly ConcurrentDictionary<string, BuildTypeDetails> _buildTypeDetailsCache;
+        private readonly ConcurrentDictionary<string, BuildDetails> _buildDetailsCache;
+        private readonly ConcurrentDictionary<string, ChangeList> _buildChangeListCache;
+        private readonly ConcurrentDictionary<string, ChangeDetail> _changeDetailsCache;
+        private readonly ConcurrentDictionary<int, List<TeamCityApi.PackageDetails>> _buildNuGetDependenciesCache;
+        private readonly ConcurrentDictionary<string, IRestResponse> _restRequestCache;
 
         public MemoryBasedBuildCache()
         {
-            _buildTypeDetailsCache = new Dictionary<string, BuildTypeDetails>();
-            _buildDetailsCache = new Dictionary<string, BuildDetails>();
-            _buildChangeListCache = new Dictionary<string, ChangeList>();
-            _changeDetailsCache = new Dictionary<string, ChangeDetail>();
-            _buildNuGetDependenciesCache = new Dictionary<int, List<TeamCityApi.PackageDetails>>();
+            _buildTypeDetailsCache = new ConcurrentDictionary<string, BuildTypeDetails>();
+            _buildDetailsCache = new ConcurrentDictionary<string, BuildDetails>();
+            _buildChangeListCache = new ConcurrentDictionary<string, ChangeList>();
+            _changeDetailsCache = new ConcurrentDictionary<string, ChangeDetail>();
+            _buildNuGetDependenciesCache = new ConcurrentDictionary<int, List<TeamCityApi.PackageDetails>>();
+            _restRequestCache = new ConcurrentDictionary<string, IRestResponse>();
+        }
+
+        public bool TryCacheForRestRequest(string url, out IRestResponse request)
+        {
+            if (_restRequestCache.ContainsKey(url))
+            {
+                request = _restRequestCache[url];
+                return true;
+            }
+            request = null;
+            return false;
+        }
+
+        public void AddCacheRequest(string url, IRestResponse request)
+        {
+            if (!_restRequestCache.ContainsKey(url))
+                _restRequestCache.TryAdd(url, request);
         }
 
         public bool TryCacheForDetailsByBuildTypeId(string buildTypeId, out BuildTypeDetails buildTypeDetails)

@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using TeamCityBuildChanges.ExternalApi.TeamCity;
 using TeamCityBuildChanges.IssueDetailResolvers;
 using TeamCityBuildChanges.NuGetPackage;
@@ -17,7 +19,7 @@ namespace TeamCityBuildChanges.Commands
         private readonly IEnumerable<IExternalIssueResolver> _externalIssueResolvers;
         private readonly IPackageChangeComparator _packageChangeComparator;
         private readonly PackageBuildMappingCache _packageBuildMappingCache;
-        private List<NuGetPackageChange> _traversedPackageChanges;
+        private ConcurrentBag<NuGetPackageChange> _traversedPackageChanges;
 
         /// <summary>
         /// Provides the ability to generate delta change manifests between arbitrary build versions.
@@ -26,7 +28,7 @@ namespace TeamCityBuildChanges.Commands
         /// <param name="externalIssueResolvers">A list of IExternalIssueResolver objects.</param>
         /// <param name="packageChangeComparator">Provides package dependency comparison capability.</param>
         /// <param name="packageBuildMappingCache">Provides the ability to map from a Nuget package to the build that created the package.</param>
-        public AggregateBuildDeltaResolver(ITeamCityApi api, IEnumerable<IExternalIssueResolver> externalIssueResolvers, IPackageChangeComparator packageChangeComparator, PackageBuildMappingCache packageBuildMappingCache, List<NuGetPackageChange> traversedPackageChanges)
+        public AggregateBuildDeltaResolver(ITeamCityApi api, IEnumerable<IExternalIssueResolver> externalIssueResolvers, IPackageChangeComparator packageChangeComparator, PackageBuildMappingCache packageBuildMappingCache, ConcurrentBag<NuGetPackageChange> traversedPackageChanges)
         {
             _api = api;
             _externalIssueResolvers = externalIssueResolvers;
@@ -142,13 +144,14 @@ namespace TeamCityBuildChanges.Commands
             //Now we need to see if we need to recurse, and whether we have been given a cache file....
             if (changeManifest.NuGetPackageChanges.Any() && recurse && _packageBuildMappingCache != null)
             {
-                foreach (var dependency in changeManifest.NuGetPackageChanges.Where(c => c.Type == NuGetPackageChangeType.Modified))
+                var modifiedPackageChanges = changeManifest.NuGetPackageChanges.Where(c => c.Type == NuGetPackageChangeType.Modified).ToList();
+                Parallel.ForEach(modifiedPackageChanges, dependency =>
                 {
                     var traversedDependency = _traversedPackageChanges.FirstOrDefault(p => p.NewVersion == dependency.NewVersion && p.OldVersion == dependency.OldVersion && p.PackageId == dependency.PackageId);
                     if (traversedDependency != null)
                     {
                         dependency.ChangeManifest = traversedDependency.ChangeManifest;
-                        continue;
+                        return;
                     }
                     var mappings = _packageBuildMappingCache.PackageBuildMappings.Where(m => m.PackageId.Equals(dependency.PackageId, StringComparison.CurrentCultureIgnoreCase)).ToList();
                     PackageBuildMapping build = null;
@@ -168,13 +171,13 @@ namespace TeamCityBuildChanges.Commands
                     if (build != null)
                     {
                         if (build.BuildConfigurationId == buildType)
-                            continue;
+                            return;
                         var instanceTeamCityApi = _api.TeamCityServer.Equals(build.ServerUrl, StringComparison.OrdinalIgnoreCase)
                                                               ? _api
                                                               : new TeamCityApi(build.ServerUrl);
- 
-                        var resolver = new AggregateBuildDeltaResolver(instanceTeamCityApi, _externalIssueResolvers,_packageChangeComparator,_packageBuildMappingCache, _traversedPackageChanges);
-                        var dependencyManifest = resolver.CreateChangeManifest(null, build.BuildConfigurationId, null,dependency.OldVersion,dependency.NewVersion, null, true, true);
+
+                        var resolver = new AggregateBuildDeltaResolver(instanceTeamCityApi, _externalIssueResolvers, _packageChangeComparator, _packageBuildMappingCache, _traversedPackageChanges);
+                        var dependencyManifest = resolver.CreateChangeManifest(null, build.BuildConfigurationId, null, dependency.OldVersion, dependency.NewVersion, null, true, true);
                         dependency.ChangeManifest = dependencyManifest;
                     }
                     else
@@ -182,7 +185,7 @@ namespace TeamCityBuildChanges.Commands
                         changeManifest.GenerationLog.Add(new LogEntry(DateTime.Now, Status.Warning, string.Format("Did not find a mapping for package: {0}.", dependency.PackageId)));
                     }
                     _traversedPackageChanges.Add(dependency);
-                }
+                });
             }
 
             return changeManifest;

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using TeamCityBuildChanges.ExternalApi.TeamCity;
@@ -35,10 +36,11 @@ namespace TeamCityBuildChanges.Commands
         public override int Run(string[] remainingArguments)
         {
             var api = string.IsNullOrEmpty(_teamCityAuthToken) ? new TeamCityApi(ServerName) : new TeamCityApi(ServerName,_teamCityAuthToken);
+            api.StartRequestQueue();
 
             var buildPackageCache = string.IsNullOrEmpty(_buildPackageCacheFile) ? null : new PackageBuildMappingCache(_buildPackageCacheFile);
 
-            var resolver = new AggregateBuildDeltaResolver(api, CreateExternalIssueResolvers(), new PackageChangeComparator(),buildPackageCache, new List<NuGetPackageChange>());
+            var resolver = new AggregateBuildDeltaResolver(api, CreateExternalIssueResolvers(), new PackageChangeComparator(),buildPackageCache, new ConcurrentBag<NuGetPackageChange>());
             ChangeManifest = string.IsNullOrEmpty(BuildType) 
                 ? resolver.CreateChangeManifestFromBuildTypeName(ProjectName, BuildName,_referenceBuild, _from, _to, _useBuildSystemIssueResolution, _recurse) 
                 : resolver.CreateChangeManifestFromBuildTypeId(BuildType, _referenceBuild, _from, _to, _useBuildSystemIssueResolution, _recurse);

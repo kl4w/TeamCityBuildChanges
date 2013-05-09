@@ -1,23 +1,29 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Threading.Tasks;
 using System.Xml.Linq;
 using RestSharp;
+using RestSharp.Deserializers;
+using RestSharp.Extensions;
 
 namespace TeamCityBuildChanges.ExternalApi.TeamCity
 {
     public class TeamCityApi : ITeamCityApi
     {
         private readonly string _teamCityServer;
-        private readonly RestClient _client;
+        private readonly IRestClient _client;
         private static string _authToken;
         private readonly string _serverUrl;
         private MemoryBasedBuildCache _cache;
-
+        private BlockingCollection<RestRequest> _requestQueue = new BlockingCollection<RestRequest>();    
+        private readonly object _packageCacheLock = new object();
+ 
         public TeamCityApi(string server, string authToken = null)
         {
             _teamCityServer = server;
@@ -25,6 +31,21 @@ namespace TeamCityBuildChanges.ExternalApi.TeamCity
             _serverUrl = string.IsNullOrEmpty(_authToken) ? TeamCityServer + "/guestAuth/": TeamCityServer + "/httpAuth/";
             _client = new RestClient(_serverUrl);
             _cache = new MemoryBasedBuildCache();
+        }
+
+        public void StartRequestQueue()
+        {
+            Task.Factory.StartNew(ConsumeRequestFromQueue);
+        }
+
+        private void ConsumeRequestFromQueue()
+        {
+            foreach(var request in _requestQueue.GetConsumingEnumerable())
+            {
+                var response = _client.Execute(request);
+                _cache.AddCacheRequest(request.Resource, response);
+            }
+
         }
 
         public string TeamCityServer
@@ -43,21 +64,16 @@ namespace TeamCityBuildChanges.ExternalApi.TeamCity
 
         public BuildTypeDetails GetBuildTypeDetailsById(string id)
         {
-            BuildTypeDetails buildTypeDetails;
-            if (_cache.TryCacheForDetailsByBuildTypeId(id, out buildTypeDetails))
-                return buildTypeDetails;
-
-            var buildDetails = GetXmlBuildRequest("app/rest/buildTypes/id:{ID}", "ID", id);
-            var response = _client.Execute<BuildTypeDetails>(buildDetails);
-            _cache.AddCacheBuildTypeDetailsById(id, response.Data);
-            return response.Data;
+            var request = GetXmlBuildRequest("app/rest/buildTypes/id:{ID}", "ID", id);
+            return QueryCacheForRequest<BuildTypeDetails>(request);
         }
 
         private static RestRequest GetXmlBuildRequest(string endpoint, string variable = null, string replacement = null)
         {
-            var request = new RestRequest(endpoint, Method.GET);
+            var finalUrl = endpoint;
             if (variable != null && replacement != null)
-                request.AddParameter(variable, replacement, ParameterType.UrlSegment);
+                finalUrl = endpoint.Replace(string.Format("{{{0}}}", variable), replacement);
+            var request = new RestRequest(finalUrl, Method.GET);
             request.RequestFormat = DataFormat.Xml;
             request.AddHeader("Accept", "application/xml");
             if (!string.IsNullOrEmpty(_authToken)) request.AddHeader("Authorization", "Basic " + _authToken);
@@ -77,37 +93,42 @@ namespace TeamCityBuildChanges.ExternalApi.TeamCity
 
         public List<PackageDetails> GetNuGetDependenciesByBuildTypeAndBuildId(string buildType, string buildId)
         {
-            List<PackageDetails> packageDetails;
-            if (_cache.TryCacheForNuGetDependenciesByBuildTypeAndBuildId(buildType, buildId, out packageDetails))
-                return packageDetails;
-
-            var restUrl = new StringBuilder();
-            restUrl.AppendFormat("{0}repository/download/{1}/{2}:id/.teamcity/nuget/nuget.xml", _serverUrl, buildType, buildId);
-
-            var restRequest = (HttpWebRequest)WebRequest.Create(restUrl.ToString());
-            if (!string.IsNullOrEmpty(_authToken)) restRequest.Headers.Add(HttpRequestHeader.Authorization, "Basic " + _authToken);
-            try
+            lock(_packageCacheLock)
             {
-                var restResponse = (HttpWebResponse)restRequest.GetResponse();
-                string response;
-                using (var reader = new StreamReader(restResponse.GetResponseStream()))
+                List<PackageDetails> packageDetails;
+                if (_cache.TryCacheForNuGetDependenciesByBuildTypeAndBuildId(buildType, buildId, out packageDetails))
+                    return packageDetails;
+
+                var restUrl = new StringBuilder();
+                restUrl.AppendFormat("{0}repository/download/{1}/{2}:id/.teamcity/nuget/nuget.xml", _serverUrl,
+                                     buildType, buildId);
+
+                var restRequest = (HttpWebRequest) WebRequest.Create(restUrl.ToString());
+                if (!string.IsNullOrEmpty(_authToken))
+                    restRequest.Headers.Add(HttpRequestHeader.Authorization, "Basic " + _authToken);
+                try
                 {
-                    response = reader.ReadToEnd();
-                }
-                var xDoc = XDocument.Parse(response.Normalize());
-                var packageList = xDoc.Root.Element("packages").Elements("package").Select(p => new PackageDetails
+                    var restResponse = (HttpWebResponse) restRequest.GetResponse();
+                    string response;
+                    using (var reader = new StreamReader(restResponse.GetResponseStream()))
                     {
-                        Id = p.Attribute("id").Value,
-                        Version = p.Attribute("version").Value
-                    }).ToList();
+                        response = reader.ReadToEnd();
+                    }
+                    var xDoc = XDocument.Parse(response.Normalize());
+                    var packageList = xDoc.Root.Element("packages").Elements("package").Select(p => new PackageDetails
+                        {
+                            Id = p.Attribute("id").Value,
+                            Version = p.Attribute("version").Value
+                        }).ToList();
 
-                _cache.AddCacheNuGetDependencies(buildType, buildId, packageList);
-                return packageList;
-            }
-            catch (WebException exception)
-            {
-                //Evil?
-                return new List<PackageDetails>();
+                    _cache.AddCacheNuGetDependencies(buildType, buildId, packageList);
+                    return packageList;
+                }
+                catch (WebException exception)
+                {
+                    //Evil?
+                    return new List<PackageDetails>();
+                }
             }
         }
 
@@ -244,49 +265,72 @@ namespace TeamCityBuildChanges.ExternalApi.TeamCity
 
         public BuildDetails GetBuildDetailsByBuildId(string id)
         {
-            BuildDetails buildDetails;
-            if (_cache.TryCacheForBuildDetailsByBuildId(id, out buildDetails))
-                return buildDetails;
-
             var request = GetXmlBuildRequest("app/rest/builds/id:{ID}", "ID", id);
-            var response = _client.Execute<BuildDetails>(request);
-            _cache.AddCacheBuildDetailsEntry(response.Data);
-            return response.Data;
+            return QueryCacheForRequest<BuildDetails>(request);
         }
 
         public ChangeList GetChangeListByBuildId(string id)
         {
-            ChangeList changeList;
-            if (_cache.TryCacheForChangeListByBuildId(id, out changeList))
-                return changeList;
-
             var request = GetXmlBuildRequest("app/rest/changes?build=id:{ID}", "ID", id);
-            var response = _client.Execute<ChangeList>(request);
-            _cache.AddCacheChangeListByBuildIdEntry(id, response.Data);
-            return response.Data;
+            return QueryCacheForRequest<ChangeList>(request);
         }
 
         public ChangeDetail GetChangeDetailsByChangeId(string id)
         {
-            ChangeDetail changeDetail;
-            if (_cache.TryCacheForChangeDetailsByChangeId(id, out changeDetail))
-                return changeDetail;
-
             var request = GetXmlBuildRequest("app/rest/changes/id:{ID}", "ID", id);
-            var response = _client.Execute<ChangeDetail>(request);
-            _cache.AddCacheChangeDetailsByChangeIdEntry(id, response.Data);
-            return response.Data;
+            return QueryCacheForRequest<ChangeDetail>(request);
         }
 
         public IEnumerable<Build> GetBuildsByBuildType(string buildType)
         {
-            IEnumerable<Build> builds;
-            if (_cache.TryCacheForBuildsByBuildTypeId(buildType, out builds))
-                return builds;
-
             var request = GetXmlBuildRequest("app/rest/builds/?locator=buildType:{ID}", "ID", buildType);
-            var response = _client.Execute<List<Build>>(request);
-            return response.Data;
+            return QueryCacheForRequest<List<Build>>(request);
+        }
+
+        private T QueryCacheForRequest<T>(RestRequest restRequest)
+        {
+            IRestResponse response;
+            if (_cache.TryCacheForRestRequest(restRequest.Resource, out response))
+            {
+                return Deserialize<T>(restRequest, response);
+            }
+
+            if (_requestQueue.Contains(restRequest))
+            {
+                while (!_cache.TryCacheForRestRequest(restRequest.Resource, out response)) { }
+            }
+            else
+            {
+                _requestQueue.Add(restRequest);
+                while (!_cache.TryCacheForRestRequest(restRequest.Resource, out response)) { }
+            }
+            return Deserialize<T>(restRequest, response);
+        }
+
+        private T Deserialize<T>(RestRequest request, IRestResponse raw)
+        {
+            request.OnBeforeDeserialization(raw);
+
+            IDeserializer handler = new XmlDeserializer();
+            handler.RootElement = request.RootElement;
+            handler.DateFormat = request.DateFormat;
+            handler.Namespace = request.XmlNamespace;
+
+            IRestResponse<T> response = new RestResponse<T>();
+			try
+			{
+			    response = raw.toAsyncResponse<T>();
+				response.Data = handler.Deserialize<T>(raw);
+				response.Request = request;
+			}
+			catch (Exception ex)
+			{
+				response.ResponseStatus = ResponseStatus.Error;
+				response.ErrorMessage = ex.Message;
+				response.ErrorException = ex;
+			}
+
+			return response.Data;
         }
     }
 
