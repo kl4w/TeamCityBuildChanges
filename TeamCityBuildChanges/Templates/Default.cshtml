@@ -56,6 +56,31 @@ a:visited{
 <html>
     <head>
         <title>TeamCity Build Change Manifest</title>
+        <script type="text/javascript">
+            window.onload = function ()
+            {
+                var packageChanges = [];
+                @foreach (var change in Model.NuGetPackageChanges)
+                {
+                    <text>
+                        packageChanges.push(["@change.PackageId", "@change.OldVersion", "@change.NewVersion"]);
+                    </text>
+                }
+
+                var table = document.getElementById("packageChanges");
+                packageChanges.forEach(function (items) 
+                {
+                    var row = document.createElement("tr");
+                    items.forEach(function (item) 
+                    {
+                        var cell = document.createElement("td");
+                        cell.textContent = item;
+                        row.appendChild(cell);
+                    });
+                    table.appendChild(row);
+                });
+            }
+        </script>
     </head>
     <body>
         <div>
@@ -145,19 +170,13 @@ a:visited{
             @if (Model.NuGetPackageChanges.Any())
             {
                 <table>
-                    <tr>
-                        <th>Package Id</th>
-                        <th>From Version</th>
-                        <th>To Version</th>
-                    </tr>
-                    @foreach (var change in Model.NuGetPackageChanges)
-                    {
+                    <tbody id="packageChanges">
                         <tr>
-                            <td>@change.PackageId</td>
-                            <td>@change.OldVersion</td>
-                            <td>@change.NewVersion</td>
+                            <th>Package Id</th>
+                            <th>From Version</th>
+                            <th>To Version</th>
                         </tr>
-                    }
+                    </tbody>
                 </table>
             }
         </div>
