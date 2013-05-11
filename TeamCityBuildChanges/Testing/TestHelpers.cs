@@ -262,5 +262,29 @@ namespace TeamCityBuildChanges.Testing
                         }
                 };
         }
+
+        public static List<NuGetPackageChange> CreateSimpleNuGetPackageDependencies()
+        {
+            var dependencies = new List<NuGetPackageChange>();
+
+            for (int i = 1; i <= 2; i++)
+            {
+                dependencies.Add(CreateNuGetPackageChange(i.ToString(), "1.0.0.0", String.Format("1.0.0.{0}", i)));
+            }
+
+            return dependencies;
+        }
+
+        private static NuGetPackageChange CreateNuGetPackageChange(string id, string oldVersion, string newVersion)
+        {
+            return new NuGetPackageChange
+                {
+                    PackageId = String.Format("Package-{0}", id),
+                    OldVersion = oldVersion,
+                    NewVersion = newVersion,
+                    Type = NuGetPackageChangeType.Modified,
+                    ChangeManifest = CreateSimpleChangeManifest()
+                };
+        }
     }
 }

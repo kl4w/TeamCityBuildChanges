@@ -140,5 +140,26 @@ a:visited{
                 </table>
             }
         </div>
+        <br/>
+        <div>
+            @if (Model.NuGetPackageChanges.Any())
+            {
+                <table>
+                    <tr>
+                        <th>Package Id</th>
+                        <th>From Version</th>
+                        <th>To Version</th>
+                    </tr>
+                    @foreach (var change in Model.NuGetPackageChanges)
+                    {
+                        <tr>
+                            <td>@change.PackageId</td>
+                            <td>@change.OldVersion</td>
+                            <td>@change.NewVersion</td>
+                        </tr>
+                    }
+                </table>
+            }
+        </div>
     </body>
 </html>

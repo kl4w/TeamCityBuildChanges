@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -16,9 +17,11 @@ namespace TeamCityBuildChanges.Tests
         [Test]
         public void Test()
         {
-            var result = new RazorOutputRenderer(@".\templates\text.cshtml").Render(TestHelpers.CreateSimpleChangeManifest());
+            var manifest = TestHelpers.CreateSimpleChangeManifest();
+            manifest.NuGetPackageChanges = TestHelpers.CreateSimpleNuGetPackageDependencies();
+            var result = new RazorOutputRenderer(@".\templates\Default.cshtml").Render(manifest);
+            File.WriteAllText(String.Format(@"{0}\test.html", Directory.GetCurrentDirectory()), result);
             Assert.True(true);//Giddyup.
         }
-
     }
 }
