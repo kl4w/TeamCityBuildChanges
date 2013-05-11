@@ -277,13 +277,20 @@ namespace TeamCityBuildChanges.Testing
 
         private static NuGetPackageChange CreateNuGetPackageChange(string id, string oldVersion, string newVersion)
         {
+            var manifest = CreateSimpleChangeManifest();
+            if (id == "2")
+                manifest.NuGetPackageChanges = new List<NuGetPackageChange>
+                    {
+                        CreateNuGetPackageChange("1", "1.0.0.0", "1.0.0.1"),
+                        CreateNuGetPackageChange("3", "1.0.0.0", "1.0.0.3")
+                    };
             return new NuGetPackageChange
                 {
                     PackageId = String.Format("Package-{0}", id),
                     OldVersion = oldVersion,
                     NewVersion = newVersion,
                     Type = NuGetPackageChangeType.Modified,
-                    ChangeManifest = CreateSimpleChangeManifest()
+                    ChangeManifest = manifest
                 };
         }
     }

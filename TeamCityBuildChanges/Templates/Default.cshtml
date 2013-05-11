@@ -65,6 +65,12 @@ a:visited{
                     <text>
                         packageChanges.push(["@change.PackageId", "@change.OldVersion", "@change.NewVersion"]);
                     </text>
+                    foreach (var innerChange in change.ChangeManifest.NuGetPackageChanges)
+                    {
+                        <text>
+                            packageChanges.push(["@innerChange.PackageId", "@innerChange.OldVersion", "@innerChange.NewVersion"]);
+                        </text>
+                    }
                 }
 
                 var table = document.getElementById("packageChanges");
