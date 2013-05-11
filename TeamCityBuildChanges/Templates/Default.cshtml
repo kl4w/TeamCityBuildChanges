@@ -57,18 +57,61 @@ a:visited{
     <head>
         <title>TeamCity Build Change Manifest</title>
         <script type="text/javascript">
+            Array.prototype.inArray = function(comparer) 
+            {
+                for (var i = 0; i < this.length; i++) 
+                {
+                    if (comparer(this[i])) return true;
+                }
+                return false;
+            };
+
+            Array.prototype.pushIfNotExist = function(element, count, comparer) 
+            {
+                if (!this.inArray(comparer)) 
+                {
+                    this.push(element);
+                    count++;
+                }
+            };
+
+            addRow = function(table, element) 
+            {
+                var row = document.createElement("tr");
+                addCell(row, element.package);
+                addCell(row, element.oldVersion);
+                addCell(row, element.newVersion);
+                table.appendChild(row);
+            };
+
+            addCell = function(row, element) 
+            {
+                var cell = document.createElement("td");
+                cell.textContent = element;
+                row.appendChild(cell);
+            };
+
             window.onload = function ()
             {
                 var packageChanges = [];
+                var count = 0;
                 @foreach (var change in Model.NuGetPackageChanges)
                 {
                     <text>
-                        packageChanges.push(["@change.PackageId", "@change.OldVersion", "@change.NewVersion"]);
+                        var element = { id : count, package : "@change.PackageId", oldVersion : "@change.OldVersion", newVersion : "@change.NewVersion" };
+                        packageChanges.pushIfNotExist(element, count, function(e) 
+                        {
+                            return e.id == element.id && e.package == element.package && e.oldVersion == element.oldVersion && e.newVersion == element.newVersion;
+                        });
                     </text>
                     foreach (var innerChange in change.ChangeManifest.NuGetPackageChanges)
                     {
                         <text>
-                            packageChanges.push(["@innerChange.PackageId", "@innerChange.OldVersion", "@innerChange.NewVersion"]);
+                            var innerElement = { id : count, package : "@innerChange.PackageId", oldVersion : "@innerChange.OldVersion", newVersion : "@innerChange.NewVersion" };
+                            packageChanges.pushIfNotExist(innerElement, count, function(e)
+                            {
+                                return e.id == innerElement.id && e.package == innerElement.package && e.oldVersion == innerElement.oldVersion && e.newVersion == innerElement.newVersion;
+                            });
                         </text>
                     }
                 }
@@ -76,14 +119,7 @@ a:visited{
                 var table = document.getElementById("packageChanges");
                 packageChanges.forEach(function (items) 
                 {
-                    var row = document.createElement("tr");
-                    items.forEach(function (item) 
-                    {
-                        var cell = document.createElement("td");
-                        cell.textContent = item;
-                        row.appendChild(cell);
-                    });
-                    table.appendChild(row);
+                    addRow(table, items);
                 });
             }
         </script>
